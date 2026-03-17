@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ovl-analyzer"
+version = "1.0.0"
+description = "Nikon MESR 数据解析与 OVL 矢量图分析工具"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.9"
+authors = [
+    {name = "Jayce"},
+]
+keywords = ["overlay", "semiconductor", "nikon", "mesr", "lithography", "metrology"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering",
+]
+dependencies = [
+    "PySide6>=6.5.0",
+    "matplotlib>=3.7.0",
+    "numpy>=1.24.0",
+    "pandas>=2.0.0",
+]
+
+[project.scripts]
+ovl-analyzer = "ovl_analyzer.main_app:main"
+
+[project.gui-scripts]
+ovl-analyzer-gui = "ovl_analyzer.main_app:main"
+
+[tool.setuptools.packages.find]
+include = ["ovl_analyzer*"]
