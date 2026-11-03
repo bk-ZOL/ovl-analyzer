@@ -8,6 +8,7 @@ Nikon MESR 数据解析与 OVL (Overlay) 矢量图分析桌面工具。
 
 - **MESR 解析**: 支持 Nikon MCSV 格式的 `.MESR` 文件，自动解析 Shot/MESP 坐标与测量数据
 - **矢量地图 (Vector Map)**: 在晶圆图上绘制 OVL 矢量箭头，支持多 Wafer 叠加显示、缩放控制
+- **INC / DIS**: INC 按 Shot 画场内形状。DIS 使用同一套 Shot 面板，并保留整片晶圆总览。网页「OVL 分析」调用的是 `ovl_analyzer.plots`（不依赖 Qt）
 - **Shot 热力图 (Heatmap)**: 按 Shot 颜色编码 OVL 大小，支持 6 种指标 (OVL Mean/Max, dX/dY Mean, dX/dY 3σ)
 - **10 参数模型**: Grid (Interfield) + Shot (Intrafield) 线性模型拟合，输出 Tx/Ty/Sx/Sy/Rw/Ow 等参数
 - **残差分析**: Raw vs Residual 矢量图对比，直观评估模型校正效果

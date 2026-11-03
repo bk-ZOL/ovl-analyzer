@@ -27,15 +27,17 @@ import matplotlib.patches as mpatches
 import matplotlib.colors as mcolors
 
 from .mesr_parser import parse_mesr_file, MESRData
+from .mesr_reader import read_mesr
 from .ovl_statistics import compute_all_wafer_statistics
 from .ovl_model import fit_10param_model, compute_shot_overlay, ModelResult
-
-
-# Wafer 颜色映射
-WAFER_COLORS = [
-    '#0000FF', '#FF0000', '#00AA00', '#FF8800', '#AA00AA',
-    '#00AAAA', '#888800', '#FF00FF', '#8888FF', '#FF8888',
-]
+from .plots import (
+    WAFER_COLORS,
+    _auto_scale,
+    draw_legacy_vector_map,
+    draw_residual_map_fig,
+    draw_vector,
+    ordered_shot_ids,
+)
 
 
 class MultiCanvas(FigureCanvas):
@@ -57,25 +59,6 @@ def _draw_wafer_outline(ax, wafer_radius):
             [-wafer_radius, -wafer_radius + notch, -wafer_radius], 'k-', lw=1.5)
 
 
-def _draw_shot_grid(ax, data, wafer_radius):
-    """绘制 Shot 网格矩形"""
-    half_sx = data.step_pitch_x / 2.0 / 1000.0
-    half_sy = data.step_pitch_y / 2.0 / 1000.0
-    all_cols = [v[0] for v in data.shots.values()]
-    all_rows = [v[1] for v in data.shots.values()]
-    col_center = (min(all_cols) + max(all_cols)) / 2.0
-    row_center = (min(all_rows) + max(all_rows)) / 2.0
-
-    for _, (col, row) in data.shots.items():
-        cx = (col - col_center) * data.step_pitch_x / 1000.0
-        cy = (row - row_center) * data.step_pitch_y / 1000.0
-        rect = mpatches.Rectangle(
-            (cx - half_sx, cy - half_sy), 2 * half_sx, 2 * half_sy,
-            lw=0.5, ec='#AAAAAA', fc='#F5F5F5', alpha=0.4
-        )
-        ax.add_patch(rect)
-
-
 def _setup_wafer_axes(ax, wafer_radius, title=""):
     """设置晶圆坐标轴通用参数"""
     margin = 10
@@ -93,42 +76,8 @@ def _setup_wafer_axes(ax, wafer_radius, title=""):
 #  Tab 1: Vector Map 绘图
 # =====================================================================
 def draw_vector_map(canvas, data, visible_wafers, vector_scale, show_grid=True):
-    """绘制 OVL 矢量地图"""
-    canvas.fig.clear()
-    ax = canvas.fig.add_subplot(111)
-
-    if data.abs_coords_df is None:
-        canvas.draw()
-        return
-
-    wafer_radius = data.wafer_size / 2.0
-    _draw_wafer_outline(ax, wafer_radius)
-    if show_grid:
-        _draw_shot_grid(ax, data, wafer_radius)
-
-    df = data.abs_coords_df
-    legend_handles = []
-
-    for wafer_id, visible in visible_wafers.items():
-        if not visible:
-            continue
-        wdf = df[(df['wafer_id'] == wafer_id) & (df['valid_flag'] == 0)]
-        if wdf.empty:
-            continue
-        color = WAFER_COLORS[(wafer_id - 1) % len(WAFER_COLORS)]
-        ax.quiver(
-            wdf['x_abs'].values, wdf['y_abs'].values,
-            wdf['dx'].values * vector_scale, wdf['dy'].values * vector_scale,
-            angles='xy', scale_units='xy', scale=1,
-            color=color, width=0.002, headwidth=5, headlength=5,
-            headaxislength=4, alpha=0.8
-        )
-        legend_handles.append(mpatches.Patch(color=color, label=f'Wafer {wafer_id}'))
-
-    _setup_wafer_axes(ax, wafer_radius, 'OVL Vector Map')
-    if legend_handles:
-        ax.legend(handles=legend_handles, loc='upper right', fontsize=9)
-    canvas.fig.tight_layout()
+    """绘制 OVL 矢量地图。INC/DIS 走 draw_vector，这里只保留原来的整片套刻图。"""
+    draw_legacy_vector_map(canvas.fig, data, visible_wafers, vector_scale, show_grid)
     canvas.draw()
 
 
@@ -213,48 +162,7 @@ def draw_shot_heatmap(canvas, data, wafer_id, metric='ovl_mean'):
 # =====================================================================
 def draw_residual_map(canvas, data, wafer_id, model_result, vector_scale):
     """绘制 10 参数模型残差矢量图"""
-    canvas.fig.clear()
-
-    if data.abs_coords_df is None or model_result.residual_dx is None:
-        canvas.draw()
-        return
-
-    # 2 子图: 左=Raw, 右=Residual
-    ax1 = canvas.fig.add_subplot(121)
-    ax2 = canvas.fig.add_subplot(122)
-
-    wafer_radius = data.wafer_size / 2.0
-    df = data.abs_coords_df[
-        (data.abs_coords_df['wafer_id'] == wafer_id) &
-        (data.abs_coords_df['valid_flag'] == 0)
-    ]
-
-    x_pos = df['x_abs'].values
-    y_pos = df['y_abs'].values
-
-    for ax, dx_data, dy_data, title, color in [
-        (ax1, df['dx'].values, df['dy'].values, 'Raw Data', '#0000FF'),
-        (ax2, model_result.residual_dx, model_result.residual_dy, 'Residual (after 10-param)', '#FF0000'),
-    ]:
-        _draw_wafer_outline(ax, wafer_radius)
-        _draw_shot_grid(ax, data, wafer_radius)
-        ax.quiver(
-            x_pos, y_pos,
-            dx_data * vector_scale, dy_data * vector_scale,
-            angles='xy', scale_units='xy', scale=1,
-            color=color, width=0.002, headwidth=5, headlength=5,
-            headaxislength=4, alpha=0.8
-        )
-        _setup_wafer_axes(ax, wafer_radius, f'{title} - Wafer {wafer_id}')
-
-        # 标注统计信息
-        dx_3s = 3 * np.std(dx_data, ddof=1)
-        dy_3s = 3 * np.std(dy_data, ddof=1)
-        info = f'X3σ={dx_3s:.4f}μm\nY3σ={dy_3s:.4f}μm'
-        ax.text(0.02, 0.98, info, transform=ax.transAxes, fontsize=8,
-                verticalalignment='top', bbox=dict(boxstyle='round', fc='white', alpha=0.8))
-
-    canvas.fig.tight_layout()
+    draw_residual_map_fig(canvas.fig, data, wafer_id, model_result, vector_scale)
     canvas.draw()
 
 
@@ -270,6 +178,7 @@ class OVLAnalyzerApp(QMainWindow):
         self.setMinimumSize(1400, 850)
 
         self.mesr_data: MESRData = None
+        self.mesr_file = None
         self.all_stats: dict = {}
         self.model_results: dict = {}  # {wafer_id: ModelResult}
         self.wafer_checkboxes: dict = {}
@@ -402,6 +311,27 @@ class OVLAnalyzerApp(QMainWindow):
 
         right_layout.addWidget(select_group)
 
+        # --- INC / DIS 共用的 Shot 选择。套刻文件不显示。 ---
+        self.shot_group = QGroupBox("Shot 视图 / Per shot")
+        shot_layout = QVBoxLayout(self.shot_group)
+        self.lbl_shot_mode = QLabel("INC 与 DIS 使用同一套按 Shot 面板。")
+        self.lbl_shot_mode.setWordWrap(True)
+        self.lbl_shot_mode.setStyleSheet("font-size: 11px;")
+        shot_layout.addWidget(self.lbl_shot_mode)
+        shot_pick = QHBoxLayout()
+        shot_pick.addWidget(QLabel("Shot:"))
+        self.cmb_shot = QComboBox()
+        self.cmb_shot.addItem("全部 Shot", None)
+        self.cmb_shot.currentIndexChanged.connect(self._on_redraw)
+        shot_pick.addWidget(self.cmb_shot)
+        shot_layout.addLayout(shot_pick)
+        self.chk_wafer_overview = QCheckBox("显示整片晶圆总览")
+        self.chk_wafer_overview.setChecked(True)
+        self.chk_wafer_overview.stateChanged.connect(self._on_redraw)
+        shot_layout.addWidget(self.chk_wafer_overview)
+        self.shot_group.setVisible(False)
+        right_layout.addWidget(self.shot_group)
+
         # --- 统计数据表 ---
         stat_group = QGroupBox("统计数据 / Statistics (per MESP)")
         stat_layout = QVBoxLayout(stat_group)
@@ -465,15 +395,20 @@ class OVLAnalyzerApp(QMainWindow):
 
     def load_file(self, filepath: str):
         try:
+            self.mesr_file = read_mesr(filepath)
             self.mesr_data = parse_mesr_file(filepath)
             self.all_stats = compute_all_wafer_statistics(self.mesr_data)
 
-            # 计算所有 Wafer 的 10 参数模型
+            # 计算所有 Wafer 的 10 参数模型。绝对坐标的 DIS 没有经典 MEAS 列时这里为空，图仍按 Shot 画。
             self.model_results = {}
-            for wid in sorted(self.mesr_data.meas_df['wafer_id'].unique()):
-                self.model_results[wid] = fit_10param_model(self.mesr_data, wid)
+            meas = self.mesr_data.meas_df
+            if meas is not None and not meas.empty and "wafer_id" in meas.columns:
+                for wid in sorted(meas["wafer_id"].unique()):
+                    self.model_results[wid] = fit_10param_model(self.mesr_data, wid)
 
             self._update_file_info()
+            self._apply_kind_controls()
+            self._apply_vector_scale()
             self._update_wafer_checkboxes()
             self._update_statistics_table()
             self._update_model_table()
@@ -490,8 +425,64 @@ class OVLAnalyzerApp(QMainWindow):
         self.lbl_machine.setText(f"机台: {d.exps_machine} / {d.meas_machine}")
         self.lbl_date.setText(f"日期: {d.meas_date}")
         self.lbl_comment.setText(f"备注: {d.comment}")
-        self.lbl_wafer_info.setText(f"Wafer: {d.wafer_num} / Shot: {d.shot_num} / MESP: {d.mesp_num}")
+        kind = self.mesr_file.kind if self.mesr_file is not None else ""
+        kind_label = {
+            "ovl": "套刻矢量",
+            "inc": "INC 按 Shot",
+            "dis": "DIS 按 Shot + 整片",
+            "both": "DIS 按 Shot + 整片",
+            "curve": "曲线",
+        }.get(kind, "")
+        extra = f" / {kind_label}" if kind_label else ""
+        self.lbl_wafer_info.setText(
+            f"Wafer: {d.wafer_num} / Shot: {d.shot_num} / MESP: {d.mesp_num}{extra}"
+        )
         self.lbl_pitch.setText(f"Step Pitch: {d.step_pitch_x:.0f} x {d.step_pitch_y:.0f} μm")
+
+    def _wafer_ids_for_ui(self):
+        meas = None if self.mesr_data is None else self.mesr_data.meas_df
+        if meas is not None and not meas.empty and "wafer_id" in meas.columns:
+            return [int(wid) for wid in sorted(meas["wafer_id"].unique())]
+        if self.mesr_file is not None:
+            return self.mesr_file.wafer_ids()
+        return []
+
+    def _apply_kind_controls(self):
+        """INC 和 DIS 共用 Shot 下拉。整片总览只在 DIS 上出现。"""
+        kind = self.mesr_file.kind if self.mesr_file is not None else "ovl"
+        per_shot = kind in ("inc", "dis", "both")
+        self.shot_group.setVisible(per_shot)
+        self.chk_wafer_overview.setVisible(kind in ("dis", "both"))
+        if kind == "inc":
+            self.lbl_shot_mode.setText("按 Shot 显示。选择单个 Shot 时只看该 Shot。")
+        elif kind in ("dis", "both"):
+            self.lbl_shot_mode.setText("按 Shot 显示，选择方式与 INC 相同。整片晶圆总览可同时保留。")
+        self.cmb_shot.blockSignals(True)
+        self.cmb_shot.clear()
+        self.cmb_shot.addItem("全部 Shot", None)
+        if self.mesr_file is not None and per_shot:
+            for sid in ordered_shot_ids(self.mesr_file):
+                col, row = self.mesr_file.shots.get(sid, (0, 0))
+                self.cmb_shot.addItem(f"Shot {sid}  ({col}, {row})", sid)
+        self.cmb_shot.blockSignals(False)
+
+    def _apply_vector_scale(self):
+        """INC/DIS 打开时用和网页相同的自动倍率，套刻仍从 5 倍开始。"""
+        kind = self.mesr_file.kind if self.mesr_file is not None else "ovl"
+        value = 5
+        if kind in ("inc", "dis", "both") and self.mesr_file is not None:
+            arr = self.mesr_file.data_array()
+            n = self.mesr_file.n_fields
+            if len(arr) and n >= 2:
+                mag = np.hypot(arr[:, n - 2], arr[:, n - 1])
+                value = int(max(1, min(500, round(_auto_scale(self.mesr_file, mag)))))
+        self.scale_spinbox.blockSignals(True)
+        self.scale_slider.blockSignals(True)
+        self.scale_spinbox.setValue(value)
+        self.scale_slider.setValue(value)
+        self.scale_spinbox.blockSignals(False)
+        self.scale_slider.blockSignals(False)
+        self.vector_scale = value
 
     def _update_wafer_checkboxes(self):
         for cb in self.wafer_checkboxes.values():
@@ -499,8 +490,8 @@ class OVLAnalyzerApp(QMainWindow):
             cb.deleteLater()
         self.wafer_checkboxes.clear()
 
-        if self.mesr_data and self.mesr_data.meas_df is not None:
-            for wid in sorted(self.mesr_data.meas_df['wafer_id'].unique()):
+        if self.mesr_data is not None or self.mesr_file is not None:
+            for wid in self._wafer_ids_for_ui():
                 color = WAFER_COLORS[(wid - 1) % len(WAFER_COLORS)]
                 cb = QCheckBox(f"Wafer {wid}")
                 cb.setChecked(True)
@@ -613,8 +604,22 @@ class OVLAnalyzerApp(QMainWindow):
         if current_tab == 0:  # Vector Map
             visible = {w: cb.isChecked() for w, cb in self.wafer_checkboxes.items()}
             show_grid = self.chk_show_grid.isChecked()
-            draw_vector_map(self.canvas_vector, self.mesr_data,
-                            visible, self.vector_scale, show_grid)
+            if self.mesr_file is not None:
+                shot_id = self.cmb_shot.currentData() if self.shot_group.isVisible() else None
+                draw_vector(
+                    self.canvas_vector.fig,
+                    self.mesr_file,
+                    self.mesr_file.data_array(),
+                    self.vector_scale,
+                    visible_wafers=visible,
+                    show_grid=show_grid,
+                    shot_id=shot_id,
+                    show_wafer_overview=self.chk_wafer_overview.isChecked(),
+                )
+                self.canvas_vector.draw()
+            else:
+                draw_vector_map(self.canvas_vector, self.mesr_data,
+                                visible, self.vector_scale, show_grid)
 
         elif current_tab == 1:  # Shot Heatmap
             if wid is not None:
