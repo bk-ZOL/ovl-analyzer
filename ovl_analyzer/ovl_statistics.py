@@ -79,7 +79,7 @@ def compute_all_wafer_statistics(data: MESRData) -> dict:
         {wafer_id: DataFrame} 字典
     """
     stats = {}
-    if data.meas_df is None:
+    if data.meas_df is None or data.meas_df.empty or "wafer_id" not in data.meas_df.columns:
         return stats
 
     for wid in sorted(data.meas_df['wafer_id'].unique()):
